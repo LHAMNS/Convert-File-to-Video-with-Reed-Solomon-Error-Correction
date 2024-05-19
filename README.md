@@ -87,3 +87,121 @@ This project converts any file into a video using Reed-Solomon error correction,
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 ```
+```
+### 1. Install Python Dependencies
+
+#### Windows
+
+Open Command Prompt or PowerShell and run the following command:
+
+```bash
+pip install numpy pillow reedsolo tk ffmpeg-python
+```
+
+#### Linux
+
+Open the terminal and run the following command:
+```
+
+pip install numpy pillow reedsolo tk ffmpeg-python
+
+```
+
+### 2. Install ffmpeg
+
+#### Windows
+
+1. Go to the [ffmpeg download page](https://ffmpeg.org/download.html).
+2. Download the version suitable for your system.
+3. Extract the downloaded files and add the `bin` directory path to the system `PATH` environment variable.
+
+You can verify the installation by running:
+
+```bash
+ffmpeg -version
+```
+
+#### Linux
+
+Run the following commands in the terminal:
+
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+You can verify the installation by running:
+
+```bash
+ffmpeg -version
+```
+
+### 3. Install CUDA and CuPy (Optional for GPU Acceleration)
+
+#### Windows
+
+1. Go to the [NVIDIA CUDA download page](https://developer.nvidia.com/cuda-downloads).
+2. Download and install the appropriate CUDA toolkit for your system.
+3. Ensure that the environment variables are correctly set (the installer usually does this automatically).
+
+Install CuPy:
+
+```bash
+pip install cupy-cudaXXX  # Replace XXX with your CUDA version, e.g., cupy-cuda112 for CUDA 11.2
+```
+
+#### Linux
+
+1. Go to the [NVIDIA CUDA download page](https://developer.nvidia.com/cuda-downloads).
+2. Download and install the appropriate CUDA toolkit for your system following the provided instructions.
+
+Install CuPy:
+
+```bash
+pip install cupy-cudaXXX  # Replace XXX with your CUDA version, e.g., cupy-cuda112 for CUDA 11.2
+```
+
+### Example Code
+
+Here is an example Python script that includes all these libraries, allowing you to verify that everything is installed correctly:
+
+```python
+import numpy as np
+import ffmpeg
+from PIL import Image, ImageDraw, ImageFont
+from reedsolo import RSCodec
+import tkinter as tk
+from tkinter import filedialog, ttk, scrolledtext
+
+try:
+    import cupy as cp
+    CUDA_ENABLED = True
+except ImportError:
+    CUDA_ENABLED = False
+
+print("All libraries imported successfully!")
+```
+
+Run this code, and if there are no errors, it means all libraries are installed correctly.
+
+### Ensuring All Libraries Are Installed
+
+You can install all the libraries in one command:
+
+#### Windows
+
+```bash
+pip install numpy pillow reedsolo tk ffmpeg-python cupy-cudaXXX
+```
+
+Replace `XXX` with your CUDA version, e.g., `cupy-cuda112`.
+
+#### Linux
+
+```bash
+pip install numpy pillow reedsolo tk ffmpeg-python cupy-cudaXXX
+```
+
+Similarly, replace `XXX` with your CUDA version, e.g., `cupy-cuda112`.
+
+If you encounter any issues, please let me know!
