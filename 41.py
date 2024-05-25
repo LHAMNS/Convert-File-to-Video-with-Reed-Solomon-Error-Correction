@@ -7,18 +7,14 @@ from PIL import Image, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from colorsys import hls_to_rgb
 
-try:
-    import cupy as cp
-    CUDA_ENABLED = True
-except ImportError:
-    CUDA_ENABLED = False
+try: import cupy as cp; CUDA_ENABLED = True
+except ImportError: CUDA_ENABLED = False
 
 DEFAULTS = {'pixel_block_width': 3, 'pixel_block_height': 3, 'video_width': 1920, 'video_height': 1080, 'fps': 30, 'error_correction_percentage': 10, 'gpu_index': 0, 'use_hdr': False, 'use_error_correction': True, 'color_space': 'bt709', 'font_size': 20, 'num_threads': 4}
 
 COLOR_HLS_VALUES = [(0, 0.5, 1), (30/360, 0.5, 1), (60/360, 0.5, 1), (90/360, 0.5, 1), (120/360, 0.5, 1), (150/360, 0.5, 1), (180/360, 0.5, 1), (210/360, 0.5, 1), (240/360, 0.5, 1), (270/360, 0.5, 1), (300/360, 0.5, 1), (330/360, 0.5, 1), (0, 0.25, 1), (0, 0.75, 1), (120/360, 0.25, 1), (120/360, 0.75, 1)]
 
 def hls_to_rgb_tuple(h, l, s): return tuple(int(c * 255) for c in hls_to_rgb(h, l, s))
-
 COLORS = {'START': (255, 255, 0), 'END': (255, 0, 255), 'MAP': {f'{i:X}': hls_to_rgb_tuple(*COLOR_HLS_VALUES[i]) for i in range(16)}}
 
 class VideoFileConverterApp:
