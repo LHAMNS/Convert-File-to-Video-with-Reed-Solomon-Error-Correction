@@ -1,14 +1,18 @@
-import os, shutil, tkinter as tk, threading, numpy as np, qrcode, ffmpeg
+import os, shutil, tkinter as tk, threading, numpy as np, soundfile as sf
 from tkinter import filedialog, ttk, scrolledtext
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from reedsolo import RSCodec, ReedSolomonError
 from PIL import Image, ImageDraw, ImageFont
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from colorsys import hls_to_rgb
 import queue
-import cv2
+import ffmpeg
+import qrcode
 
-CUDA_ENABLED = True
-
+try:
+    import cupy as cp
+    CUDA_ENABLED = True
+except ImportError:
+    CUDA_ENABLED = False
 
 DEFAULTS = {
     'pixel_block_width': 3,
@@ -24,7 +28,9 @@ DEFAULTS = {
     'font_size': 20,
     'num_threads': 4,
     'use_memory_cache': False,
-    'memory_cache_size': 4  # 默认缓存大小4GB
+    'memory_cache_size': 4,  # 默认缓存大小4GB
+    'audio_duration': 1,  # 音频持续时间，默认为1秒
+    'audio_mapping': '20000'  # 音频映射模式，默认为20000进制
 }
 
 COLOR_HLS_VALUES = [(i / 16, 0.5, 1) for i in range(16)]
@@ -40,7 +46,7 @@ def clear_directory(dir_path):
         shutil.rmtree(dir_path)
     os.makedirs(dir_path)
 
-class VideoFileConverterApp:
+class FileConverterApp:
     def __init__(self, root):
         self.root = root
         self.mode_var = tk.StringVar(value="pixel")
@@ -51,8 +57,10 @@ class VideoFileConverterApp:
         self.auto_adjust_var = tk.BooleanVar(value=True)
         self.use_memory_cache_var = tk.BooleanVar(value=DEFAULTS['use_memory_cache'])
         self.memory_cache_size_var = tk.StringVar(value=str(DEFAULTS['memory_cache_size']))
+        self.audio_duration_var = tk.StringVar(value=str(DEFAULTS['audio_duration']))
+        self.audio_mapping_var = tk.StringVar(value=DEFAULTS['audio_mapping'])
         self.setup_ui()
-        self.root.title("文件转视频工具，支持里德-所罗门纠错")
+        self.root.title("文件转换工具")
         clear_directory('cache')
         clear_directory('string')
         self.image_cache = queue.Queue()
@@ -64,7 +72,7 @@ class VideoFileConverterApp:
         """设置图形界面"""
         frame = ttk.Frame(self.root, padding="10")
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text="将文件转换为带有里德-所罗门纠错的视频:").pack(pady=10)
+        ttk.Label(frame, text="将文件转换为带有里德-所罗门纠错的视频或音频:").pack(pady=10)
         
         # 模式选择按钮
         mode_frame = ttk.Frame(frame)
@@ -72,6 +80,7 @@ class VideoFileConverterApp:
         ttk.Radiobutton(mode_frame, text="像素模式", variable=self.mode_var, value="pixel", command=self.update_ui).pack(side=tk.LEFT)
         ttk.Radiobutton(mode_frame, text="文本模式", variable=self.mode_var, value="text", command=self.update_ui).pack(side=tk.LEFT)
         ttk.Radiobutton(mode_frame, text="二维码模式", variable=self.mode_var, value="qrcode", command=self.update_ui).pack(side=tk.LEFT)
+        ttk.Radiobutton(mode_frame, text="音频模式", variable=self.mode_var, value="audio", command=self.update_ui).pack(side=tk.LEFT)
         
         # 配置参数输入框
         self.config_frame = ttk.Frame(frame)
@@ -88,15 +97,15 @@ class VideoFileConverterApp:
         self.log_message("准备编码...")
         
         # 开始转换按钮
-        ttk.Button(frame, text="选择文件并转换为视频", command=self.convert_file_to_video).pack(pady=5)
+        ttk.Button(frame, text="选择文件并转换", command=self.convert_file).pack(pady=5)
 
     def update_ui(self):
         """更新图形界面，显示或隐藏不同模式的输入框"""
         for widget in self.config_frame.winfo_children():
             widget.destroy()
         for name in DEFAULTS:
-            if name not in ['use_hdr', 'use_error_correction', 'color_space', 'font_size', 'num_threads', 'use_memory_cache', 'memory_cache_size']:
-                if self.mode_var.get() in ["text", "qrcode"] and name in ['pixel_block_width', 'pixel_block_height']:
+            if name not in ['use_hdr', 'use_error_correction', 'color_space', 'font_size', 'num_threads', 'use_memory_cache', 'memory_cache_size', 'audio_duration', 'audio_mapping']:
+                if self.mode_var.get() in ["text", "qrcode", "audio"] and name in ['pixel_block_width', 'pixel_block_height']:
                     continue
                 ttk.Label(self.config_frame, text=f"{name.replace('_', ' ').title()}:").pack()
                 var = tk.StringVar(value=str(DEFAULTS[name]))
@@ -117,6 +126,12 @@ class VideoFileConverterApp:
             self.qr_number_entry = ttk.Entry(self.config_frame, textvariable=self.qr_number)
             self.qr_number_entry.pack(pady=5)
             self.toggle_qr_options()
+        elif self.mode_var.get() == "audio":
+            ttk.Label(self.config_frame, text="音频持续时间（秒）:").pack(pady=5)
+            ttk.Entry(self.config_frame, textvariable=self.audio_duration_var).pack(pady=5)
+            ttk.Label(self.config_frame, text="音频映射预设:").pack(pady=5)
+            self.audio_mapping_menu = ttk.Combobox(self.config_frame, textvariable=self.audio_mapping_var, values=["16", "2000", "20000"])
+            self.audio_mapping_menu.pack(pady=5)
 
         ttk.Checkbutton(self.config_frame, text="启用HDR", variable=self.use_hdr_var).pack(pady=5)
         ttk.Checkbutton(self.config_frame, text="启用纠错", variable=self.use_error_correction_var).pack(pady=5)
@@ -175,8 +190,8 @@ class VideoFileConverterApp:
         if len(log_lines) > max_lines:
             self.status_text.delete('1.0', f'{len(log_lines) - max_lines}.0')
 
-    def convert_file_to_video(self):
-        """选择文件并开始转换为视频"""
+    def convert_file(self):
+        """选择文件并开始转换"""
         file_path = filedialog.askopenfilename()
         output_path = filedialog.asksaveasfilename(defaultextension=".mp4", filetypes=[("MP4 files", "*.mp4")])
         if not file_path or not output_path:
@@ -185,10 +200,10 @@ class VideoFileConverterApp:
         self.log_message(f"输出路径: {output_path}")
         if not os.path.exists(os.path.dirname(output_path)):
             os.makedirs(os.path.dirname(output_path))
-        threading.Thread(target=self.process_file_to_video, args=(file_path, output_path), daemon=True).start()
+        threading.Thread(target=self.process_file, args=(file_path, output_path), daemon=True).start()
 
-    def process_file_to_video(self, file_path, output_path):
-        """处理文件并转换为视频"""
+    def process_file(self, file_path, output_path):
+        """处理文件并转换"""
         try:
             # 获取并转换用户输入的参数
             self.video_width = int(self.video_width.get())
@@ -202,6 +217,8 @@ class VideoFileConverterApp:
             self.num_threads = int(self.num_threads.get())
             self.use_memory_cache = self.use_memory_cache_var.get()
             self.memory_cache_size = int(self.memory_cache_size_var.get()) * 1024 * 1024 * 1024  # 转换为字节
+            self.audio_duration = float(self.audio_duration_var.get()) if self.mode_var.get() == "audio" else None
+            self.audio_mapping = self.audio_mapping_var.get()
 
             # 读取文件数据
             data = self.read_file_data(file_path)
@@ -219,14 +236,16 @@ class VideoFileConverterApp:
             else:
                 encoded_data = data
 
-            # 根据选择的模式创建视频
+            # 根据选择的模式创建视频或音频
             if self.mode_var.get() == "pixel":
                 self.create_video_pixel_mode(encoded_data, output_path, self.use_hdr_var.get(), self.color_space_var.get(), self.num_threads, self.force_gpu_var.get())
             elif self.mode_var.get() == "text":
                 self.create_video_text_mode(encoded_data, output_path, self.use_hdr_var.get(), self.color_space_var.get(), self.font_size, self.num_threads, self.force_gpu_var.get())
             elif self.mode_var.get() == "qrcode":
                 self.create_video_qrcode_mode(encoded_data, output_path, self.use_hdr_var.get(), self.color_space_var.get(), self.num_threads, self.force_gpu_var.get())
-            self.log_message("视频创建成功。")
+            elif self.mode_var.get() == "audio":
+                self.create_audio_mode(encoded_data, output_path, self.audio_duration, self.audio_mapping)
+            self.log_message("处理完成。")
             self.progress.config(value=100)
         except Exception as e:
             self.log_message(f"错误: {str(e)}")
@@ -399,6 +418,37 @@ class VideoFileConverterApp:
         except Exception as e:
             self.log_message(f"视频创建过程中出错: {str(e)}")
 
+    def create_audio_mode(self, data, output_path, duration, mapping):
+        """创建音频模式"""
+        self.log_message("开始创建音频模式...")
+        frequencies = {
+            '16': [i * 1000 for i in range(1, 17)],
+            '2000': [i * 10 for i in range(1, 2001)],
+            '20000': [i for i in range(1, 20001)]
+        }
+        selected_frequencies = frequencies[mapping]
+
+        num_samples = int(44100 * duration)  # 每秒44100个样本
+        audio_data = []
+
+        try:
+            for i in range(0, len(data), len(selected_frequencies)):
+                frame_data = data[i:i + len(selected_frequencies)]
+                samples = np.zeros(num_samples)
+                for j, byte in enumerate(frame_data):
+                    if byte:
+                        samples += np.sin(2 * np.pi * selected_frequencies[j % len(selected_frequencies)] * np.arange(num_samples) / 44100)
+                audio_data.append(samples)
+                self.log_message(f"处理音频帧 {i // len(selected_frequencies) + 1}/{(len(data) + len(selected_frequencies) - 1) // len(selected_frequencies)}")
+                self.progress.config(value=(i + len(selected_frequencies)) / len(data) * 100)
+                self.root.update_idletasks()
+
+            audio_data = np.concatenate(audio_data)
+            sf.write(output_path, audio_data, 44100)
+            self.log_message("音频处理完成。")
+        except Exception as e:
+            self.log_message(f"音频创建过程中出错: {str(e)}")
+
     def generate_text_images(self, font_size):
         """生成文本图像"""
         clear_directory('string')
@@ -508,10 +558,10 @@ class VideoFileConverterApp:
             block_x = (i % blocks_per_row) * self.pixel_block_width
             block_y = (i // blocks_per_row) * self.pixel_block_height
             color = cp.array(COLORS['MAP']['{:X}'.format(data[i] % 16)])
-            image[block_y:block_y + self.pixel_block_height, block_x:block_x + self.pixel_block_width] = color
+            image[block_y:block_y + self.pixel_block_height, block_x:=block_x + self.pixel_block_width] = color
         return image.get()
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = VideoFileConverterApp(root)
+    app = FileConverterApp(root)
     root.mainloop()
