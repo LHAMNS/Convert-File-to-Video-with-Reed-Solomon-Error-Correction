@@ -185,6 +185,7 @@ class ConversionTask:
     
     def _conversion_worker(self):
         """转换工作线程"""
+        global task_progress
         try:
             # 初始化帧生成器
             self.frame_generator = FrameGenerator(
@@ -252,7 +253,6 @@ class ConversionTask:
                 self.video_encoder.stop()
                 
                 # 更新任务进度
-                global task_progress
                 task_progress.update({
                     "status": "completed",
                     "processed_frames": self.processed_frames,
@@ -270,7 +270,6 @@ class ConversionTask:
             logger.error(f"转换错误: {e}", exc_info=True)
             
             # 更新任务进度
-            global task_progress
             task_progress.update({
                 "status": "error",
                 "error_message": str(e)
