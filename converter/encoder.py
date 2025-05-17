@@ -14,6 +14,7 @@ from pathlib import Path
 import shutil
 import json
 import psutil
+import cv2
 from .utils import is_nvenc_available, is_qsv_available
 
 logger = logging.getLogger(__name__)
@@ -733,3 +734,50 @@ class BatchVideoEncoder:
             json.dump(metadata, f, indent=2)
         
         logger.info(f"合并元数据已写入: {metadata_path}")
+
+
+class AviDirectWriter:
+    """简单的AVI写入器，直接将帧写入AVI容器。"""
+
+    def __init__(self, width, height, fps=30, output_path=None, codec="DIB "):
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.output_path = Path(output_path or "output/output.avi")
+        self.codec = codec
+        self.writer = None
+        self.start_time = None
+        self.frames_written = 0
+
+        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
+
+    def start(self):
+        fourcc = cv2.VideoWriter_fourcc(*self.codec)
+        self.writer = cv2.VideoWriter(
+            str(self.output_path), fourcc, self.fps, (self.width, self.height)
+        )
+        if not self.writer.isOpened():
+            raise RuntimeError("无法打开AVI写入器")
+        self.start_time = time.time()
+        self.frames_written = 0
+
+    def add_frame(self, frame):
+        if self.writer is None:
+            raise RuntimeError("写入器尚未启动")
+        if frame.shape != (self.height, self.width, 3):
+            raise ValueError("帧尺寸不匹配")
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        self.writer.write(bgr)
+        self.frames_written += 1
+
+    def stop(self):
+        if self.writer:
+            self.writer.release()
+            self.writer = None
+        elapsed = time.time() - self.start_time if self.start_time else 0
+        fps = self.frames_written / elapsed if elapsed > 0 else 0
+        return {
+            "frames_written": self.frames_written,
+            "elapsed_time": elapsed,
+            "fps": fps,
+        }

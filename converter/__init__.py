@@ -71,4 +71,4 @@ CHUNK_SIZE = 1024 * 1024  # 1MB
 from .utils import *
 from .error_correction import ReedSolomonEncoder
 from .frame_generator import FrameGenerator
-from .encoder import VideoEncoder
+from .encoder import VideoEncoder, AviDirectWriter
